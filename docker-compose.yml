@@ -1,0 +1,79 @@
+# docker compose up -d   ->  Postgres + migrations + first-run bootstrap + API + worker.
+# The API is published on 127.0.0.1:8787 only. Settings and channel tokens come from .env (copy .env.example).
+# First run: `docker compose logs init` shows the owner key once (unless you set POSTGATE_OWNER_KEY yourself).
+name: postgate
+
+x-app: &app
+  build: .
+  image: postgate:0.1.0
+  env_file:
+    - path: .env
+      required: false
+  environment: &app-env
+    DATABASE_URL: postgres://postgate:${POSTGRES_PASSWORD:-postgate-local-only}@db:5432/postgate
+    POSTGATE_MEDIA_DIR: /data/media
+  volumes:
+    - media:/data/media
+
+services:
+  db:
+    image: postgres:17.10-alpine
+    environment:
+      POSTGRES_DB: postgate
+      POSTGRES_USER: postgate
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgate-local-only}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgate -d postgate"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  migrate:
+    <<: *app
+    command: ["node", "src/db/migrate-main.ts"]
+    depends_on:
+      db: { condition: service_healthy }
+    restart: "no"
+
+  init:
+    <<: *app
+    command: ["node", "src/admin/bootstrap.ts", "default", "Default"]
+    environment:
+      <<: *app-env
+      # The owner is the login of whoever runs compose (identity derived, not typed); override with POSTGATE_OWNER.
+      POSTGATE_OWNER: ${POSTGATE_OWNER:-user:${USER:-owner}}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: "no"
+
+  api:
+    <<: *app
+    command: ["node", "src/api/main.ts"]
+    environment:
+      <<: *app-env
+      POSTGATE_API_HOST: 0.0.0.0
+      POSTGATE_API_ALLOW_ALL_INTERFACES: "1"
+    ports:
+      - "127.0.0.1:${POSTGATE_API_PORT:-8787}:8787"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/v1/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  worker:
+    <<: *app
+    command: ["node", "src/worker/main.ts"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  media:

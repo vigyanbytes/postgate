@@ -1,0 +1,7 @@
+postgate
+Copyright 2026 The postgate Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+Runtime dependency: node-postgres (pg), MIT License. Development dependencies (PGlite, TypeScript, type definitions)
+are not distributed with it. It calls third-party platform APIs (LinkedIn, Meta, Google/YouTube, X); their terms
+govern that use. Platform names are trademarks of their respective owners.

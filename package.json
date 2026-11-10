@@ -1,0 +1,26 @@
+{
+  "name": "postgate",
+  "version": "0.1.0",
+  "description": "Self-hosted social media scheduler with a human approval gate: compose, approve, schedule and publish to LinkedIn, Facebook Pages, Instagram, YouTube and X. Postgres queue, HTTP API, CLI and MCP server.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "bin": { "postgate": "bin/postgate.ts", "postgate-mcp": "bin/postgate-mcp.ts" },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.ts\" \"test/**/*.test.mjs\"",
+    "typecheck": "tsc -p tsconfig.json",
+    "api": "node src/api/main.ts",
+    "worker": "node src/worker/main.ts",
+    "migrate": "node src/db/migrate-main.ts",
+    "bootstrap": "node src/admin/bootstrap.ts"
+  },
+  "dependencies": {
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.10",
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "typescript": "7.0.2"
+  }
+}
