@@ -129,3 +129,31 @@ To walk the exact same commands without any network: stop the compose worker (`d
 `DATABASE_URL=postgres://postgate:<password>@127.0.0.1:<db port>/postgate POSTGATE_STANDIN_URL=http://127.0.0.1:8790 npm run worker`
 (publish the db port in a compose override for this). The stand-in URL must be loopback; the worker refuses anything
 else. Posts land at `http://127.0.0.1:8790/__standin/posts`. Start the compose worker again for the real test.
+
+## HeyGen — one avatar video (costs credits)
+
+HeyGen has no free test mode: this spends real credits for one short video. Do it once, with a stock avatar.
+
+1. **Key**: HeyGen dashboard → API → create an API key (pay-as-you-go wallet or plan with API access). Put it in your
+   secret manager and expose it as `HEYGEN_API_TOKEN` to the worker (`.env`, then `docker compose up -d worker`) and to
+   your shell for the listing step. Never paste it into a command line, draft or agent chat.
+2. **Pick ids (read-only, free)**: `postgate heygen avatars` and `postgate heygen voices` → choose a stock avatar look id
+   and a voice id.
+3. **Allow it**: your owner key already has `media:generate`. Only if an agent should do this, mint
+   `postgate key create video-agent --scope media:generate` and give that key to the agent.
+4. **Draft to attach to** (optional): `postgate draft --body "postgate video test – please ignore" --target youtube --setting youtube.title="postgate test" --setting youtube.privacyStatus=private`.
+5. **Generate one short video** (keep the script to one sentence to keep the cost low):
+   ```bash
+   postgate video avatar --script "This is a short test video. Please ignore." --avatar <look id> --voice <voice id> \
+     --aspect 9:16 --consent "stock avatar" --post <draft id> --title "postgate test"
+   postgate video status <job id>      # queued → running → done (usually a few minutes)
+   ```
+6. **Verify**: `done` shows `media <asset id>`; `postgate post <draft id>` lists it in the post's media and the post is a
+   `draft` again. In the HeyGen dashboard the video appears with the title "postgate test"; the job's `usage` shows the
+   duration HeyGen reported. Compare credits spent with HeyGen's billing page and note it.
+7. **If it fails**: `postgate video status` shows HeyGen's code (`insufficient_credit`, `avatar_not_found`,
+   `unauthorized`, …). A failure marked "not retried" means the create call's outcome was unknown: look in the
+   HeyGen dashboard before trying again, so you do not pay twice.
+8. **Optional publish**: the draft now carries the video; continue with the YouTube steps above (request approval,
+   approve, schedule, verify private upload, unpublish). Delete the video in the HeyGen dashboard afterwards if you
+   do not want to keep it there.

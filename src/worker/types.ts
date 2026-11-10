@@ -10,6 +10,8 @@ export interface MediaStorage {
   read(storageKey: string): Promise<Uint8Array>;
   /** Short-lived signed public URL; required by platforms that pull media (Instagram, Facebook video). */
   publicUrl?(storageKey: string): Promise<string>;
+  /** Needed by media generation jobs, which store their output. */
+  save?(tenantId: string, bytes: Uint8Array, mime: string): Promise<{ storageKey: string; sha256: string }>;
 }
 
 export interface WorkerDeps {
@@ -24,6 +26,8 @@ export interface WorkerDeps {
   now(): Date;
   sleep(ms: number): Promise<void>;
   random?: () => number;
+  /** Downloads a generated file (media jobs). Same network path as platform calls (stand-in mode applies). */
+  download?(url: string, maxBytes: number): Promise<{ bytes: Uint8Array; mime: string }>;
 }
 
 export type Outcome =

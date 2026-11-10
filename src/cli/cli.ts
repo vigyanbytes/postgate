@@ -9,6 +9,7 @@ import { oauthConnect } from '../oauth/connect.ts';
 import { httpClient } from '../providers/http.ts';
 import { defaultRegistry } from '../providers/registry.ts';
 import { kindOfMime } from '../media/storage.ts';
+import { heygenList } from '../media/heygen.ts';
 import { createStandin, startStandinServer } from '../standin/standin.ts';
 
 export interface Io {
@@ -38,7 +39,13 @@ API (needs POSTGATE_URL and POSTGATE_KEY):
   postgate schedule ID --at TIME [--tz ZONE] | unschedule ID
   postgate cancel ID | retry ID | delete ID                                            (member key)
   postgate unpublish ID      remove the live copies from the platforms again        (member key)
-  postgate key create NAME [--days N]       automation key for an agent/script (owner/admin key)
+  postgate key create NAME [--days N] [--scope media:generate]   automation key for an agent/script (owner/admin key)
+
+AI video (costs provider credits; the video joins the draft and still needs approval):
+  postgate video avatar --script TEXT --avatar ID --consent "WHO agreed | stock avatar" [--voice ID] [--post ID]
+                        [--aspect 16:9|9:16|1:1|4:5|5:4] [--resolution 720p|1080p] [--title T] [--key-env VAR]
+  postgate video status JOB_ID
+  postgate heygen avatars|voices           list ids (local; reads $HEYGEN_API_TOKEN, read-only)
 
 Local (no API):
   postgate doctor --provider P --external-id ID --token-env VAR [--text T] [--media FILE …] [--title T]
@@ -110,6 +117,9 @@ function readable(verb: string, sub: string | undefined, j: any): string {
     case 'request-approval': return `Approval requested (${j.approvalId}); the post is ${j.status}. A human approver runs: postgate approve <post id>`;
     case 'approve': case 'reject': return `Post is now ${j.postStatus}.${j.postStatus === 'approved' ? ' Not scheduled yet: postgate schedule <id> --at TIME' : ''}`;
     case 'schedule': return `Post ${j.postId} is ${j.status} for ${j.scheduledLocal}${j.status === 'scheduled' ? '' : ' (takes effect once approved)'}.`;
+    case 'video': return sub === 'status'
+      ? `${j.id}  ${j.status}${j.assetId ? `  media ${j.assetId}` : ''}${j.postId ? `  post ${j.postId}` : ''}${j.error ? `  ${JSON.stringify(j.error)}` : ''}`
+      : `Video job ${j.id} queued (${j.provider}). Check: postgate video status ${j.id}`;
     case 'key': return `Automation key (shown once, keep it secret): ${j.key}\nscopes: ${(j.scopes ?? []).join(', ')}`;
     default: return JSON.stringify(j, null, 2);
   }
@@ -165,7 +175,18 @@ async function apiCommand(a: ReturnType<typeof parse>, io: Io, req: Request): Pr
     case 'delete': return req('DELETE', `/v1/posts/${id(sub)}`);
     case 'key':
       if (sub !== 'create' || !arg) throw new UsageError('key create NAME');
-      return req('POST', '/v1/keys', { body: { name: arg, ...(a.one('days') ? { expiresInDays: Number(a.one('days')) } : {}) } });
+      return req('POST', '/v1/keys', { body: { name: arg, ...(a.one('days') ? { expiresInDays: Number(a.one('days')) } : {}),
+        ...(a.all('scope').length ? { scopes: ['drafts:read', 'drafts:write', 'approvals:request', 'schedule:write', ...a.all('scope')] } : {}) } });
+    case 'video':
+      if (sub === 'status') return req('GET', `/v1/media-jobs/${id(arg, 'media job id')}`);
+      if (sub === 'avatar') {
+        if (!a.one('script') || !a.one('avatar') || !a.one('consent')) throw new UsageError('video avatar needs --script, --avatar and --consent');
+        return req('POST', '/v1/media-jobs', { body: { capability: 'avatar_video', provider: 'heygen', script: a.one('script'), avatarId: a.one('avatar'),
+          consent: a.one('consent'), ...(a.one('voice') ? { voiceId: a.one('voice') } : {}), ...(a.one('post') ? { postId: a.one('post') } : {}),
+          ...(a.one('aspect') ? { aspectRatio: a.one('aspect') } : {}), ...(a.one('resolution') ? { resolution: a.one('resolution') } : {}),
+          ...(a.one('title') ? { title: a.one('title') } : {}), ...(a.one('key-env') ? { keyEnv: a.one('key-env') } : {}) } });
+      }
+      throw new UsageError('video avatar | video status JOB_ID');
     default: throw new UsageError(`unknown command: ${a.pos.join(' ')}\n\n${HELP}`);
   }
 }
@@ -223,6 +244,16 @@ export async function run(argv: string[], io: Io): Promise<number> {
       io.out(a.json ? JSON.stringify(r, null, 2) : ['Token files written (mode 0600; never commit or paste them):',
         ...r.files.map((f) => `  ${f.kind.padEnd(8)} ${f.displayName}  external id ${f.externalId}\n           ${f.path}`),
         `Next: export <VAR>="$(cat <file>)" where the worker runs, then: postgate channel add --provider ${provider} --external-id <id> --token-env <VAR>`].join('\n'));
+      return 0;
+    }
+    if (verb === 'heygen') {
+      const what = a.pos[1];
+      if (what !== 'avatars' && what !== 'voices') throw new UsageError('heygen avatars | heygen voices');
+      const envName = a.one('key-env') ?? 'HEYGEN_API_TOKEN';
+      const key = io.env[envName];
+      if (!key) throw new UsageError(`$${envName} is not set`);
+      const list = await heygenList(httpClient(io.fetch), key, what);
+      io.out(a.json ? JSON.stringify(list, null, 2) : list.map((x) => `${x.id.padEnd(40)} ${x.name.padEnd(30)} ${x.extra}`).join('\n') || 'none');
       return 0;
     }
     if (verb === 'standin') {

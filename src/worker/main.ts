@@ -15,7 +15,7 @@ import { keyRingFromSecrets } from '../credentials/envelope.ts';
 import { envSecretResolver } from '../credentials/secrets.ts';
 import { pgDb } from '../db/db.ts';
 import { diskStorage } from '../media/storage.ts';
-import { httpClient, standinFetch } from '../providers/http.ts';
+import { httpClient, standinFetch, type FetchLike } from '../providers/http.ts';
 import { defaultRegistry } from '../providers/registry.ts';
 import { noopTracer } from '../telemetry/tracer.ts';
 import type { WorkerDeps } from './types.ts';
@@ -60,7 +60,8 @@ export function workerConfig(env: Env): WorkerConfig {
 
 export function buildDeps(cfg: WorkerConfig, opts: { pool: pg.Pool; env: Env; fetch?: typeof fetch }): WorkerDeps {
   const base = opts.fetch ?? fetch;
-  const http = httpClient(cfg.standinUrl ? standinFetch(cfg.standinUrl, base) : base);
+  const routed = cfg.standinUrl ? standinFetch(cfg.standinUrl, base) : base;
+  const http = httpClient(routed);
   const secrets = envSecretResolver(opts.env);
   const storage = cfg.mediaDir
     ? diskStorage({ dir: cfg.mediaDir, ...(cfg.publicUrl ? { publicBaseUrl: cfg.publicUrl } : {}), ...(cfg.mediaUrlSecret ? { urlSecret: cfg.mediaUrlSecret } : {}) })
@@ -75,7 +76,19 @@ export function buildDeps(cfg: WorkerConfig, opts: { pool: pg.Pool; env: Env; fe
     workerId: cfg.workerId,
     now: () => new Date(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    download: (url, max) => downloadBytes(routed, url, max),
   };
+}
+
+/** GET a file into memory with a size cap (generated media from a provider's short-lived URL). */
+export async function downloadBytes(f: FetchLike, url: string, maxBytes: number): Promise<{ bytes: Uint8Array; mime: string }> {
+  const res = await f(url, { signal: AbortSignal.timeout(600_000) });
+  if (!res.ok) throw new Error(`download failed: ${res.status}`);
+  const len = Number(res.headers.get('content-length') ?? 0);
+  if (len > maxBytes) throw new Error(`download larger than ${maxBytes} bytes`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.byteLength > maxBytes) throw new Error(`download larger than ${maxBytes} bytes`);
+  return { bytes, mime: (res.headers.get('content-type') ?? 'application/octet-stream').split(';')[0]!.trim() };
 }
 
 /** One AbortController that SIGTERM or SIGINT aborts; the run loop finishes its current job and returns. */

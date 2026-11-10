@@ -4,9 +4,11 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { Db, Queryable } from '../db/db.ts';
 
 export const API_SCOPES = ['drafts:read', 'drafts:write', 'approvals:request', 'approvals:decide', 'schedule:write',
-  'channels:write'] as const;
+  'channels:write', 'media:generate'] as const;
 /** What an agent or script gets: everything except deciding approvals and managing channels. */
 export const AUTOMATION_SCOPES = ['drafts:read', 'drafts:write', 'approvals:request', 'schedule:write'] as const;
+/** Scopes an owner may ADD to an automation key on purpose (they cost money). Never approvals:decide. */
+export const GRANTABLE_SCOPES = [...AUTOMATION_SCOPES, 'media:generate'] as const;
 export type ApiScope = (typeof API_SCOPES)[number];
 
 export const hashKey = (key: string) => createHash('sha256').update(key).digest('hex');

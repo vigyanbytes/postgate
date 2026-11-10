@@ -16,9 +16,11 @@ import { createDraft, DraftError, getPost, listPosts, validatePost, type DraftTa
 import { cancelPost, deleteDraft, editPost, postHistory, retryPost, setSchedule, unpublishPost, unschedule } from '../posts/manage.ts';
 import { DEFAULT_TIMEZONE, isTimeZone, parseScheduleTime } from '../posts/time.ts';
 import type { ProviderRegistry } from '../providers/registry.ts';
-import { AUTOMATION_SCOPES, createApiKey, resolveApiKey, type ApiPrincipal, type ApiScope } from './keys.ts';
+import { AUTOMATION_SCOPES, GRANTABLE_SCOPES, createApiKey, resolveApiKey, type ApiPrincipal, type ApiScope } from './keys.ts';
 import { kindOfMime, type DiskStorage } from '../media/storage.ts';
 import { SECRET_NAME } from '../credentials/secrets.ts';
+import { MEDIA_PROVIDERS } from '../media/heygen.ts';
+import { enqueue } from '../queue/queue.ts';
 import { HttpError } from './errors.ts';
 
 export interface ApiDeps {
@@ -39,7 +41,7 @@ export interface ApiDeps {
 /** The contract as data: docs/API.md is tested against it. */
 export const API_ROUTES = [
   ['GET', '/v1/health'], ['GET', '/v1/me'], ['GET', '/v1/channels'], ['POST', '/v1/channels'], ['POST', '/v1/channels/:id/status'],
-  ['GET', '/v1/media'], ['POST', '/v1/media'], ['GET', '/media/:key'], ['POST', '/v1/keys'],
+  ['GET', '/v1/media'], ['POST', '/v1/media'], ['POST', '/v1/media-jobs'], ['GET', '/v1/media-jobs/:id'], ['GET', '/media/:key'], ['POST', '/v1/keys'],
   ['GET', '/v1/posts'], ['GET', '/v1/posts/:id'], ['POST', '/v1/drafts'], ['PATCH', '/v1/posts/:id'], ['DELETE', '/v1/posts/:id'],
   ['POST', '/v1/posts/:id/validate'], ['POST', '/v1/posts/:id/approval-requests'], ['POST', '/v1/posts/:id/decision'],
   ['POST', '/v1/approvals/decide'], ['POST', '/v1/posts/:id/schedule'], ['POST', '/v1/posts/:id/unschedule'],
@@ -269,13 +271,59 @@ export function createApiHandler(deps: ApiDeps) {
       });
       return { status: 201, body: { id, kind, mime, sizeBytes: bytes.byteLength, sha256: saved.sha256 } };
     }
+    if (method === 'POST' && url.pathname === '/v1/media-jobs') {
+      need(p, 'media:generate');
+      const b = await readJson(req, max);
+      if (b.capability !== 'avatar_video') throw new HttpError(400, 'bad_request', 'capability must be avatar_video');
+      const provider = MEDIA_PROVIDERS[str(b.provider, 'provider', { optional: true, max: 40 }) ?? 'heygen'];
+      if (!provider) throw new HttpError(422, 'unknown_provider', `media providers: ${Object.keys(MEDIA_PROVIDERS).join(', ')}`);
+      const consent = str(b.consent, 'consent (who agreed this face and voice may be used, or "stock avatar")', { max: 500 })!;
+      if (consent.trim().length < 3) throw new HttpError(400, 'bad_request', 'consent must say who agreed, or "stock avatar"');
+      const keyEnv = str(b.keyEnv, 'keyEnv', { optional: true, max: 100 }) ?? provider.keyEnv;
+      if (!SECRET_NAME.test(keyEnv)) throw new HttpError(400, 'bad_request', 'keyEnv is the NAME of an environment variable, never a key');
+      if (keyEnv !== provider.keyEnv) needAdmin(p);
+      const params = { script: b.script, avatarId: b.avatarId, ...(b.voiceId !== undefined ? { voiceId: b.voiceId } : {}),
+        ...(b.aspectRatio !== undefined ? { aspectRatio: b.aspectRatio } : {}), ...(b.resolution !== undefined ? { resolution: b.resolution } : {}),
+        ...(b.title !== undefined ? { title: b.title } : {}) };
+      const problems = provider.validate({ capability: 'avatar_video', params, idempotencyKey: 'validate' });
+      if (problems.length) throw new HttpError(422, 'invalid_request', problems.join('; '));
+      const postIdIn = str(b.postId, 'postId', { optional: true, max: 36 });
+      if (postIdIn && !UUID.test(postIdIn)) throw new HttpError(400, 'bad_request', 'postId must be a uuid');
+      const out = await asTenant(async (tx) => {
+        if (postIdIn) {
+          const post = (await tx.query<{ status: string }>('select status from social.posts where id = $1', [postIdIn])).rows[0];
+          if (!post) throw new HttpError(404, 'not_found', 'no such post');
+          if (!['draft', 'in_review'].includes(post.status)) throw new HttpError(409, 'not_editable', `post is ${post.status}; attach generated media to a draft`);
+        }
+        const row = (await tx.query<{ id: string }>(
+          `insert into social.media_jobs (tenant_id, capability, provider, params, consent, key_env, post_id, requested_by)
+           values ($1, 'avatar_video', $2, $3, $4, $5, $6, $7) returning id`,
+          [p.tenantId, provider.id, JSON.stringify(params), consent, keyEnv, postIdIn ?? null, actor])).rows[0]!;
+        await enqueue(tx, { tenantId: p.tenantId, kind: 'media_job', key: `media_job:${row.id}:submit`, payload: { media_job_id: row.id }, maxAttempts: 4 });
+        await tx.query(`insert into social.audit_log (tenant_id, actor, action, subject_type, subject_id, detail)
+          values ($1, $2, 'media_job.requested', 'media_job', $3, $4)`,
+          [p.tenantId, actor, row.id, JSON.stringify({ provider: provider.id, capability: 'avatar_video', consent, postId: postIdIn ?? null, scriptChars: String(b.script).length })]);
+        return row.id;
+      });
+      return { status: 202, body: { id: out, status: 'queued', provider: provider.id, note: 'generation costs provider credits; the video is attached to the draft (if given) and still needs approval to publish' } };
+    }
+    const mj = /^\/v1\/media-jobs\/([0-9a-f-]{36})$/i.exec(url.pathname);
+    if (method === 'GET' && mj) {
+      need(p, 'drafts:read');
+      const row = await asTenant(async (tx) => (await tx.query(
+        `select id, capability, provider, status, consent, post_id as "postId", external_job_id as "externalJobId", polls,
+                result_asset_id as "assetId", usage, error, requested_by as "requestedBy", created_at as "createdAt", updated_at as "updatedAt"
+           from social.media_jobs where id = $1`, [mj[1]])).rows[0]);
+      if (!row) throw new HttpError(404, 'not_found', 'no such media job');
+      return { status: 200, body: row };
+    }
     if (method === 'POST' && url.pathname === '/v1/keys') {
       needAdmin(p);
       const b = await readJson(req, max);
       const name = str(b.name, 'name', { max: 100 })!;
       const scopes = (b.scopes ?? AUTOMATION_SCOPES) as string[];
-      if (!Array.isArray(scopes) || !scopes.length || !scopes.every((sc) => (AUTOMATION_SCOPES as readonly string[]).includes(sc))) {
-        throw new HttpError(400, 'bad_request', `automation keys may only hold ${AUTOMATION_SCOPES.join(', ')} (never approvals:decide)`);
+      if (!Array.isArray(scopes) || !scopes.length || !scopes.every((sc) => (GRANTABLE_SCOPES as readonly string[]).includes(sc))) {
+        throw new HttpError(400, 'bad_request', `automation keys may only hold ${GRANTABLE_SCOPES.join(', ')} (never approvals:decide)`);
       }
       const days = typeof b.expiresInDays === 'number' ? Math.min(365, Math.max(1, b.expiresInDays)) : undefined;
       const k = await asTenant((tx) => createApiKey(tx, { tenantId: p.tenantId, name: `automation:${name}`, scopes: scopes as ApiScope[],

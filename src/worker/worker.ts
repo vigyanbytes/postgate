@@ -2,12 +2,14 @@
 // Stateless: run as many replicas as needed; SKIP LOCKED + leases keep them apart.
 import { backoffMs, claim, complete, enqueueDuePublishes, fail, type Job } from '../queue/queue.ts';
 import { deleteTarget, firstComment, publishTarget } from './publish.ts';
+import { mediaJob } from '../media/job.ts';
 import type { Handler, Outcome, WorkerDeps } from './types.ts';
 
 export const DEFAULT_HANDLERS: Record<string, Handler> = {
   publish_target: publishTarget,
   first_comment: firstComment,
   delete_target: deleteTarget,
+  media_job: mediaJob,
 };
 
 export interface WorkerOptions {

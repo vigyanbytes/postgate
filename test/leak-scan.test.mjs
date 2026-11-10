@@ -137,7 +137,7 @@ const PUBLIC_HOSTS = new Set(['api.linkedin.com', 'www.linkedin.com', 'learn.mic
   'www.facebook.com', 'developers.facebook.com', 'business.facebook.com', 'graph.instagram.com', 'api.instagram.com', 'www.instagram.com',
   'www.googleapis.com', 'oauth2.googleapis.com', 'accounts.google.com', 'developers.google.com', 'support.google.com', 'console.cloud.google.com',
   'www.youtube.com', 'studio.youtube.com', 'api.x.com', 'x.com', 'docs.x.com', 'developer.x.com', 'console.x.com', 't.co', 'www.heygen.com',
-  'api.heygen.com', 'upload.heygen.com', 'docs.heygen.com', 'app.heygen.com', 'www.linkedin.com', 'developer.linkedin.com', 'www.postgresql.org','github.com', 'raw.githubusercontent.com', 'www.apache.org', 'apache.org', 'json-schema.org', 'opencode.ai',
+  'api.heygen.com', 'upload.heygen.com', 'docs.heygen.com', 'app.heygen.com', 'developers.heygen.com', 'www.linkedin.com', 'developer.linkedin.com', 'www.postgresql.org','github.com', 'raw.githubusercontent.com', 'www.apache.org', 'apache.org', 'json-schema.org', 'opencode.ai',
   'antigravity.google', 'docs.litellm.ai', 'ghcr.io', 'hub.docker.com', 'docker.io', 'registry.npmjs.org', 'www.npmjs.com', 'nodejs.org',
   'openrouter.ai', 'docs.vllm.ai', 'huggingface.co', 'modelcontextprotocol.io', 'docs.anthropic.com', 'code.claude.com',
   'developers.openai.com', 'geminicli.com', 'pnpm.io', 'learn.microsoft.com', 'git-scm.com', 'spdx.org', 'host.docker.internal']);

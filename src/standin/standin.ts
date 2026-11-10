@@ -11,10 +11,10 @@ import type { AddressInfo } from 'node:net';
 import type { FetchLike } from '../providers/http.ts';
 
 export interface StandinRequest { method: string; url: string; headers: Record<string, string>; body: Uint8Array }
-export interface StandinReply { status: number; headers?: Record<string, string>; json?: unknown }
+export interface StandinReply { status: number; headers?: Record<string, string>; json?: unknown; bytes?: Uint8Array }
 
 export interface StandinPost {
-  provider: 'linkedin' | 'facebook' | 'instagram' | 'youtube' | 'x';
+  provider: 'linkedin' | 'facebook' | 'instagram' | 'youtube' | 'x' | 'heygen';
   id: string;
   author: string;
   text: string;
@@ -250,6 +250,36 @@ export function createStandin(opts: { pullMedia?: FetchLike } = {}): StandinStat
     return { status: 200, json: { id: `ct${next()}` } };
   });
 
+  // ---- HeyGen (media generation, API v3; auth header x-api-key) ------------------------------------------------
+  const HG = /^api\.heygen\.com$/;
+  const hgErr = (status: number, code: string, message: string) => ({ status, json: { error: { code, message, request_id: `req-${next()}` } } });
+  const videos = new Map<string, { polls: number; body: any }>();
+  const hgAuth = (r: StandinRequest) => { const k = r.headers['x-api-key']; return k && !state.revoked.has(k); };
+  on('POST', HG, /^\/v3\/videos$/, ({ req, body }) => {
+    if (!hgAuth(req)) return hgErr(401, 'unauthorized', 'The API key provided is invalid, expired, or missing.');
+    if (body?.type !== 'avatar' || !body.avatar_id) return hgErr(400, 'invalid_parameter', 'type avatar and avatar_id are required');
+    if (typeof body.script !== 'string' || !body.script) return hgErr(400, 'invalid_parameter', 'script is required');
+    if (body.avatar_id === 'missing-avatar') return hgErr(404, 'avatar_not_found', 'avatar not found');
+    const id = `hgv${next()}`;
+    videos.set(id, { polls: 0, body });
+    post('heygen', body.avatar_id, body.script, body, id);
+    return { status: 200, json: { data: { video_id: id, status: 'waiting', output_format: 'mp4', resolution: body.resolution ?? '720p' } } };
+  }, false);
+  on('GET', HG, /^\/v3\/videos\/(\w+)$/, ({ req, m }) => {
+    if (!hgAuth(req)) return hgErr(401, 'unauthorized', 'The API key provided is invalid, expired, or missing.');
+    const v = videos.get(m[1]!);
+    if (!v) return hgErr(404, 'video_not_found', 'video not found');
+    v.polls++;
+    if (v.polls < 2) return { status: 200, json: { data: { id: m[1], status: 'processing' } } };
+    if (v.body.script.includes('FAIL')) return { status: 200, json: { data: { id: m[1], status: 'failed', failure_code: 'render_failed', failure_message: 'stand-in failure' } } };
+    return { status: 200, json: { data: { id: m[1], status: 'completed', duration: 12.5,
+      video_url: `https://heygen-standin.example/videos/${m[1]}.mp4?Expires=9999999999` } } };
+  }, false);
+  on('GET', HG, /^\/v3\/avatars\/looks$/, ({ req }) => hgAuth(req) ? { status: 200, json: { data: [{ id: 'standin_look_1', name: 'Stand-in Avatar', avatar_type: 'studio_avatar', default_voice_id: 'standin_voice_1' }], has_more: false } } : hgErr(401, 'unauthorized', 'bad key'), false);
+  on('GET', HG, /^\/v3\/models\/audio\/voices$/, ({ req }) => hgAuth(req) ? { status: 200, json: { data: [{ voice_id: 'standin_voice_1', name: 'Stand-in Voice', language: 'English', status: 'ACTIVE' }], has_more: false } } : hgErr(401, 'unauthorized', 'bad key'), false);
+  on('GET', /^heygen-standin\.example$/, /^\/videos\/(\w+)\.mp4$/, ({ m }) => videos.has(m[1]!)
+    ? { status: 200, headers: { 'content-type': 'video/mp4' }, bytes: new Uint8Array(100_000).fill(9) } : { status: 404, json: { message: 'expired' } }, false);
+
   // ---- X ------------------------------------------------------------------------------------------------------
   const X = /^api\.x\.com$/;
   on('POST', X, /^\/2\/oauth2\/token$/, ({ body, req }) => body.grant_type && /^Basic /.test(req.headers.authorization ?? '')
@@ -327,6 +357,7 @@ export function inProcessFetch(state: StandinState): FetchLike {
     const r = new Request(input, init as RequestInit);
     const headers = lowerHeaders(r.headers);
     const reply = await state.handle({ method: r.method, url: input, headers, body: new Uint8Array(await r.arrayBuffer()) });
+    if (reply.bytes) return new Response(reply.bytes as BodyInit, { status: reply.status, headers: { 'content-type': 'application/octet-stream', ...reply.headers } });
     const body = reply.status === 204 || reply.json === undefined ? null : JSON.stringify(reply.json);
     return new Response(body, { status: reply.status, headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...reply.headers } });
   };
@@ -346,6 +377,11 @@ export async function startStandinServer(state: StandinState, port = 0): Promise
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers[k] = v;
     const reply = await state.handle({ method: req.method ?? 'GET', url: `https://${host}/${rest.join('/')}`, headers, body: new Uint8Array(Buffer.concat(chunks)) });
+    if (reply.bytes) {
+      res.writeHead(reply.status, { 'content-type': 'application/octet-stream', ...reply.headers });
+      res.end(reply.bytes);
+      return;
+    }
     const body = reply.status === 204 || reply.json === undefined ? '' : JSON.stringify(reply.json);
     res.writeHead(reply.status, { ...(body ? { 'content-type': 'application/json' } : {}), ...reply.headers });
     res.end(body);

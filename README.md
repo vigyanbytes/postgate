@@ -15,6 +15,8 @@ Compose a post (text + media) with per-channel variants, ask for approval, sched
   approval and propose times — never approve or publish.
 - **Tokens by name**: a channel stores the *name* of the environment variable that holds its token, never the token.
 - `postgate doctor` shows the exact requests a publish would send, without sending them.
+- **AI avatar video (HeyGen)** as a media step: script → video → attached to a draft, which still needs approval
+  ([docs/MEDIA.md](docs/MEDIA.md)). Separate `media:generate` scope, consent recorded per job, key by variable name.
 
 Apache-2.0. Node.js 24+, Postgres (tested with 17). One runtime dependency (`pg`).
 

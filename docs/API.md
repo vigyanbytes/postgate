@@ -109,3 +109,19 @@ Member key. Re-queues `failed` / `needs_attention` targets on active channels (s
 ### `POST /v1/posts/:id/unpublish`
 Member key. Queues a `delete_target` job for every published target; the worker deletes each live post on its platform.
 Instagram media cannot be deleted through the API: that target records `post_target.delete_failed` (delete it in the app).
+
+### `POST /v1/media-jobs`
+Needs `media:generate` (owner keys have it; an automation key only when the owner granted it:
+`postgate key create NAME --scope media:generate`). Generation costs provider credits.
+```json
+{ "capability": "avatar_video", "provider": "heygen", "script": "What the avatar says (<= 5000 chars)",
+  "avatarId": "<HeyGen look id>", "voiceId": "<optional>", "aspectRatio": "9:16", "resolution": "720p", "title": "optional",
+  "consent": "who agreed this face and voice may be used, or \"stock avatar\"", "postId": "<optional draft to attach to>",
+  "keyEnv": "<optional env var NAME holding the provider key; owner/admin only; default HEYGEN_API_TOKEN>" }
+```
+`202 {id, status: "queued"}`. The worker submits, polls, downloads the video into media storage and, when `postId` is a
+draft or in review, appends it to the post's media. That is a content change: the post returns to `draft` and needs a
+fresh approval. A submit with an unknown outcome is not retried (it may have been billed).
+
+### `GET /v1/media-jobs/:id`
+`{id, status: queued|running|done|failed, assetId, postId, polls, usage, error, consent, …}`.
